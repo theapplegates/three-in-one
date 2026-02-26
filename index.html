@@ -59,18 +59,14 @@
 	out.textContent = 'Loading cryptographic libraries…';
 
 	// Fetch only the modules we need; show a clear error if any import fails
-	let ml_kem1024, slh_dsa_shake_256s, XWing, KitchenSink_ml_kem768_x25519, x448;
+	let slh_dsa_shake_256s, XWing, KitchenSink_ml_kem768_x25519, ml_kem1024_p384;
 	try {
 	  const results = await Promise.all([
-		import('https://esm.sh/@noble/post-quantum/ml-kem'),
 		import('https://esm.sh/@noble/post-quantum/slh-dsa'),
 		import('https://esm.sh/@noble/post-quantum/hybrid'),
-		import('https://esm.sh/@noble/curves/ed448'),
 	  ]);
-	  ({ ml_kem1024 }                       = results[0]);
-	  ({ slh_dsa_shake_256s }               = results[1]);
-	  ({ XWing, KitchenSink_ml_kem768_x25519 } = results[2]);
-	  ({ x448 }                              = results[3]);
+	  ({ slh_dsa_shake_256s }                              = results[0]);
+	  ({ XWing, KitchenSink_ml_kem768_x25519, ml_kem1024_p384 } = results[1]);
 	  genBtn.disabled = false;
 	  out.textContent = '✅ Libraries loaded. Click "Generate Key" to start.';
 	} catch (e) {
@@ -111,13 +107,8 @@
 		  // KitchenSink = ML-KEM-768 + X25519 + SHAKE256/HKDF
 		  ({ publicKey: kemPK, secretKey: kemSK } = KitchenSink_ml_kem768_x25519.keygen());
 		} else {
-		  // RFC 9580 v6 default: ML-KEM-1024 + X448
-		  const { publicKey: mlPK, secretKey: mlSK } = ml_kem1024.keygen();
-		  const x448SK = x448.utils.randomPrivateKey();
-		  const x448PK = x448.getPublicKey(x448SK);
-		  // Concatenate ML-KEM-1024 pk + X448 pk as the combined subkey
-		  kemPK = new Uint8Array([...mlPK, ...x448PK]);
-		  kemSK = new Uint8Array([...mlSK, ...x448SK]);
+		  // ML-KEM-1024 + P-384 hybrid (from noble hybrid module, no extra import needed)
+		  ({ publicKey: kemPK, secretKey: kemSK } = ml_kem1024_p384.keygen());
 		}
 
 		// Produce ASCII-armored output
@@ -158,7 +149,7 @@
 	<div class="panel" id="keygen">
 	  <label>Choose PQC Profile</label>
 	  <select id="profileMode">
-		<option value="x448" selected>SLH-DSA + ML-KEM-1024/X448 (XWing-style, RFC 9580)</option>
+		<option value="x448" selected>SLH-DSA + ML-KEM-1024/P-384 (RFC 9580 Cat-5)</option>
 		<option value="xwing">XWing (ML-KEM-768 + X25519, SHAKE256/HKDF)</option>
 		<option value="kitchensink">KitchenSink (ML-KEM-768 + X25519, SHAKE256/HKDF)</option>
 	  </select>
