@@ -47,14 +47,36 @@
 	#output { background: #fafafa; white-space: pre-wrap; word-break: break-all; }
   </style>
 
-  <!-- Load noble libraries via esm.sh as an ES module (correct approach for browser) -->
-  <script type="module">
-	import { ml_kem768, ml_kem1024 } from ‘https://esm.sh/@noble/post-quantum/ml-kem’;
-	import { slh_dsa_shake_256s } from ‘https://esm.sh/@noble/post-quantum/slh-dsa’;
-	import { x25519 } from ‘https://esm.sh/@noble/curves/x25519’;
-	import { x448 } from ‘https://esm.sh/@noble/curves/x448’;
-	import { sha256 } from ‘https://esm.sh/@noble/hashes/sha2’;
-	import { hkdf } from ‘https://esm.sh/@noble/hashes/hkdf’;
+  <!-- Load noble libraries via dynamic import so failures are visible in the UI -->
+  <script>
+  document.addEventListener(‘DOMContentLoaded’, async function () {
+	const out = document.getElementById(‘output’);
+	out.textContent = ‘Loading cryptographic libraries…’;
+
+	// Fetch all modules in parallel; show a clear error if any import fails
+	let ml_kem768, ml_kem1024, slh_dsa_shake_256s, x25519, x448, sha256, hkdf;
+	try {
+	  const results = await Promise.all([
+		import(‘https://esm.sh/@noble/post-quantum/ml-kem’),
+		import(‘https://esm.sh/@noble/post-quantum/slh-dsa’),
+		import(‘https://esm.sh/@noble/curves/x25519’),
+		import(‘https://esm.sh/@noble/curves/x448’),
+		import(‘https://esm.sh/@noble/hashes/sha2’),
+		import(‘https://esm.sh/@noble/hashes/hkdf’),
+	  ]);
+	  ({ ml_kem768, ml_kem1024 } = results[0]);
+	  ({ slh_dsa_shake_256s }    = results[1]);
+	  ({ x25519 }               = results[2]);
+	  ({ x448 }                 = results[3]);
+	  ({ sha256 }               = results[4]);
+	  ({ hkdf }                 = results[5]);
+	  out.textContent = ‘✅ Libraries loaded. Click "Generate Key" to start.’;
+	} catch (e) {
+	  out.textContent = ‘ERROR: Failed to load cryptographic libraries.\n\n’
+		+ e.message
+		+ ‘\n\nCheck your internet connection or try refreshing.’;
+	  return;
+	}
 
 	// === Helper: Uint8Array → correct Base64 ===
 	function uint8ToBase64(bytes) {
@@ -69,12 +91,6 @@
 	  return `-----BEGIN PGP ${blockType} KEY BLOCK-----\n\n${b64}-----END PGP ${blockType} KEY BLOCK-----`;
 	}
 
-	function hexToBytes(hex) {
-	  const bytes = new Uint8Array(hex.length / 2);
-	  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(2 * i, 2), 16);
-	  return bytes;
-	}
-
 	// === SLH-DSA-SHAKE-256s signing keygen (synchronous but CPU-intensive) ===
 	function generateSLHDSA() {
 	  const { publicKey: pk, secretKey: sk } = slh_dsa_shake_256s.keygen();
@@ -84,22 +100,14 @@
 	// === KitchenSink: ML-KEM-768 + X25519, HKDF-SHA-256 ===
 	function generateKitchenSink() {
 	  const { publicKey: mlkem768pk, secretKey: mlkem768sk } = ml_kem768.keygen();
-
 	  const x25519SK = x25519.utils.randomPrivateKey();
 	  const x25519PK = x25519.getPublicKey(x25519SK);
-
-	  // KEM encapsulation
 	  const { cipherText: ciphertext, sharedSecret: kemSS } = ml_kem768.encapsulate(mlkem768pk);
-
-	  // ECDH: use a fresh ephemeral key as the peer (demo — real use needs a recipient’s public key)
 	  const ephSK = x25519.utils.randomPrivateKey();
 	  const x25519SS = x25519.getSharedSecret(ephSK, x25519PK);
-
-	  // Combine KEM + ECDH shared secrets via HKDF-SHA-256
 	  const ikm = new Uint8Array([...kemSS, ...x25519SS]);
 	  const info = new TextEncoder().encode(‘PQC-Hybrid-OpenPGP’);
 	  const combinedSS = hkdf(sha256, ikm, new Uint8Array(0), info, 48);
-
 	  return { mlkem768pk, mlkem768sk, x25519PK, x25519SK, combinedSS, ciphertext };
 	}
 
@@ -117,51 +125,55 @@
 
 	// === Generate Hybrid PQC Key (SLH-DSA + ML-KEM+X448 or KitchenSink/XWing) ===
 	async function generatePQCKey(mode = ‘x448’) {
-	  const out = document.getElementById(‘output’);
 	  out.textContent = ‘Generating… SLH-DSA key gen may take 10–30 s, please wait.’;
 
 	  // Yield to browser so the message renders before the blocking SLH-DSA call
 	  await new Promise(r => setTimeout(r, 50));
 
-	  // Step 1: SLH-DSA signing key (synchronous, CPU-intensive)
-	  const slhKP = generateSLHDSA();
+	  try {
+		// Step 1: SLH-DSA signing key (synchronous, CPU-intensive)
+		const slhKP = generateSLHDSA();
 
-	  // Step 2: Hybrid KEM key
-	  let kemKP;
-	  if (mode === ‘x448’) {
-		// RFC 9580 v6 + draft: ML-KEM-1024 + X448
-		const { publicKey: mlkemPK, secretKey: mlkemSK } = ml_kem1024.keygen();
-		const x448SK = x448.utils.randomPrivateKey();
-		const x448PK = x448.getPublicKey(x448SK);
-		kemKP = { mlkem768pk: mlkemPK, mlkemSK, x448PK, x448SK };
-	  } else if (mode === ‘xwing’) {
-		kemKP = generateXWing();
-	  } else {
-		kemKP = generateKitchenSink();
+		// Step 2: Hybrid KEM key
+		let kemKP;
+		if (mode === ‘x448’) {
+		  const { publicKey: mlkemPK, secretKey: mlkemSK } = ml_kem1024.keygen();
+		  const x448SK = x448.utils.randomPrivateKey();
+		  const x448PK = x448.getPublicKey(x448SK);
+		  kemKP = { mlkem768pk: mlkemPK, mlkemSK, x448PK, x448SK };
+		} else if (mode === ‘xwing’) {
+		  kemKP = generateXWing();
+		} else {
+		  kemKP = generateKitchenSink();
+		}
+
+		// Serialize primary (SLH-DSA) + subkey (KEM)
+		const primary = armoredOpenPGP("PUBLIC", slhKP.pk);
+		const subkey  = armoredOpenPGP("PUBLIC", kemKP.mlkem768pk);
+		const all = `${primary}\n\n${subkey}`;
+
+		out.textContent = all;
+
+		const blob = new Blob([all], { type: ‘text/plain’ });
+		window.pqcBlob = blob;
+		window.pqcKeys = { slhPK: slhKP.pk, slhSK: slhKP.sk, kemKP };
+
+		// Auto-download
+		const a = document.createElement(‘a’);
+		a.href = URL.createObjectURL(blob);
+		a.download = `pqc-key-${mode}-${Date.now()}.asc`;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+	  } catch (e) {
+		out.textContent = ‘ERROR during key generation:\n\n’ + e.message;
+		console.error(e);
 	  }
-
-	  // Serialize primary (SLH-DSA) + subkey (KEM)
-	  const primary = armoredOpenPGP("PUBLIC", slhKP.pk);
-	  const subkey  = armoredOpenPGP("SUBKEY", kemKP.mlkem768pk);
-	  const all = `${primary}\n\n${subkey}`;
-
-	  out.textContent = all;
-
-	  const blob = new Blob([all], { type: ‘text/plain’ });
-	  window.pqcBlob = blob;
-	  window.pqcKeys = { slhPK: slhKP.pk, slhSK: slhKP.sk, kemKP };
-
-	  // Auto-download
-	  const a = document.createElement(‘a’);
-	  a.href = URL.createObjectURL(blob);
-	  a.download = `pqc-key-${mode}-${Date.now()}.asc`;
-	  document.body.appendChild(a);
-	  a.click();
-	  document.body.removeChild(a);
 	}
 
 	// Expose for inline onclick handlers
 	window.generatePQCKey = generatePQCKey;
+  });
   </script>
 </head>
 
@@ -172,7 +184,7 @@
 
 	<div class="panel" id="keygen">
 	  <label>Choose PQC Profile</label>
-	  <select id="profileMode" onchange="this.onchange = null; alert('Selected mode: ' + this.value);">
+	  <select id="profileMode">
 		<option value="x448" selected>SLH-DSA + ML-KEM-1024/X448 (XWing-style, RFC 9580)</option>
 		<option value="xwing">XWing (ML-KEM-768 + X25519, SHAKE256/HKDF)</option>
 		<option value="kitchensink">KitchenSink (ML-KEM-768 + X25519, SHAKE256/HKDF)</option>
