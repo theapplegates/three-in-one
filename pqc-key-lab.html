@@ -47,179 +47,112 @@
 	#output { background: #fafafa; white-space: pre-wrap; word-break: break-all; }
   </style>
 
-  <!-- Load noble libraries from CDN (use with caution in production) -->
-  <script src="https://unpkg.com/@noble/post-quantum/dist/noble-post-quantum.es2018.min.js"></script>
-  <script src="https://unpkg.com/@noble/curves/dist/noble-curves.es2018.min.js"></script>
-  <script src="https://unpkg.com/@noble/hashes/dist/noble-hashes.es2018.min.js"></script>
+  <!-- Load noble libraries via esm.sh as an ES module (correct approach for browser) -->
+  <script type="module">
+	import { ml_kem768, ml_kem1024 } from ‘https://esm.sh/@noble/post-quantum/ml-kem’;
+	import { slh_dsa_shake_256s } from ‘https://esm.sh/@noble/post-quantum/slh-dsa’;
+	import { x25519 } from ‘https://esm.sh/@noble/curves/x25519’;
+	import { x448 } from ‘https://esm.sh/@noble/curves/x448’;
+	import { sha256 } from ‘https://esm.sh/@noble/hashes/sha2’;
+	import { hkdf } from ‘https://esm.sh/@noble/hashes/hkdf’;
 
-  <script>
-	// Polyfill for fetch() vectors if needed (unused here since we inline core logic)
-	const { slhdsa, mlkem } = window.PQC;
-	const { x448, x25519 } = window.Curves;
-	const { sha3_512, shake256, hkdf } = window.Hashes;
-
-	// === Helper: Convert bytes to ASCII-armored OpenPGP block ===
-	function armoredOpenPGP(blockType, binaryData) {
-	  const b64 = [...new Uint8Array(binaryData)].map(b => 
-		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".charAt(b)
-	  ).join('');
-	  const b64padded = b64 + '='.repeat((3 - b64.length % 3) % 3);
-
-	  // OpenPGP base64 + header/footer
-	  return `-----BEGIN PGP ${blockType} KEY BLOCK-----
-
-${b64padded.replace(/.{1,76}/g,'$&\n')}
------END PGP ${blockType} KEY BLOCK-----`;
+	// === Helper: Uint8Array → correct Base64 ===
+	function uint8ToBase64(bytes) {
+	  let binary = ‘’;
+	  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+	  return btoa(binary);
 	}
 
-	// === XWing: Lightweight PQC KEM combo (RFC 9580 compatible) ===
-	async function xwingGen(seedHex, eseedHex) {
-	  // Using noble-post-quantum's internal helper — but not exported yet (v0.1.3)
-	  // So we inline low-level XWing: ML-KEM-768 + X25519 (with shake256 & hkdf)
-	  // See: https://github.com/RustCrypto/KEMs/blob/master/x-wing/src/test-vectors.json
-
-	  // For now, use a simplified gen — but for correctness, we use ML-KEM-1024 + X448 (per your spec)
-	  // We’ll build both XWing (MLKEM-768/X25519 + Shake256/HKDF) and KitchenSink below
-	  throw new Error("Not implemented — see KitchenSink generator instead");
-	}
-
-	// === KitchenSink: ML-KEM-768 + X25519 — SHA3-512, Shake256, HKDF-SHA256 ===
-	async function generateKitchenSink() {
-	  // 1. ML-KEM-768 keypair
-	  const mlkem768KP = await mlkem.generateKeyPair();
-	  const { publicKey: mlkem768pk, secretKey: mlkem768sk } = mlkem768KP;
-
-	  // 2. X25519 keypair
-	  const x25519SK = window.Curves.x25519.utils.randomPrivateKey();
-	  const x25519PK = window.Curves.x25519.getPublicKey(x25519SK);
-
-	  // 3. Shared secret via KEM encapsulation
-	  const [ss, ciphertext] = await window.PQC.mlkem.encap(mlkem768pk);
-
-	  // 4. Hybrid ECDH + KEM shared secret
-	  const x25519SS = window.Curves.x25519.getSharedSecret(x25519SK, x25519PK);
-
-	  // 5. Combine KEM + ECDH shared secret via HKDF-SHA-256
-	  const ikm = new Uint8Array([...new Uint8Array(ss), ...new Uint8Array(x25519SS)]);
-	  const salt = new Uint8Array(0);
-	  const info = new Uint8Array("PQC-Hybrid-OpenPGP".repeat(1)).slice(0, 32);
-	  const combinedSS = window.Hashes.hkdf(
-		window.Hashes.sha256,
-		ikm, salt, info, 48 // 384-bit SS
-	  );
-
-	  return {
-		mlkem768pk, mlkem768sk,
-		x25519PK, x25519SK,
-		combinedSS, ciphertext
-	  };
-	}
-
-	// === XWing: ML-KEM-768 + X25519, Test Vector Mode (Per RFC 9580 draft-ietf-openpgp-pqc) ===
-	async function generateXWing() {
-	  // Static seed per vector (for reproducibility)
-	  const seedHex = "7f9c2ba4e88f827d616045507605853ed73b8093f6efbc88eb1a6eacfa66ef26";
-	  const eseedHex = "3cb1eea988004b93103cfb0aeefd2a686e01fa4a58e8a3639ca8a1e3f9ae57e235b8cc873c23dc62b8d260169afa2f75ab916a58d974918835d25e6a435085b2";
-	  const ssHex  = "d2df0522128f09dd8e2c92b1e905c793d8f57a54c3da25861f10bf4ca613e384";
-	  const pkHex  = "e2236b35a8c24b39b10aa1323a96a919a2ced88400633a7b07131713fc14b2b5b19cfc3da5fa1a92c49f25513e0fd30d6b16";
-
-	  // For correctness, use the exact XWing vector components:
-	  const seed = Uint8Array.from(hexToBytes(seedHex));
-	  const pk   = Uint8Array.from(hexToBytes(pkHex));
-	  const ss   = Uint8Array.from(hexToBytes(ssHex));
-
-	  // In real use: `xwingKeyGen(seed)` or `xwingEncaps(pk, eseed)`, but since they’re not exported in PQC.* yet:
-	  // We’ll simulate the structure — just return raw keypair + test-ss for demo.
-
-	  // ML-KEM-768 public key *only* (static), and ECDH subkey — but actual XWing uses shake256/hkdf internally
-	  // So we fabricate a *full* secret + public key to serialize
-
-	  const mlkem768KP = await window.PQC.mlkem.generateKeyPair(seed); // if supported — otherwise fallback to manual
-	  const { publicKey: pk_raw, secretKey: sk_raw } = mlkem768KP;
-
-	  // If seed not supported, use provided pk & ss for UI demo only:
-	  const fallback = {
-		mlkem768pk: pk,
-		mlkem768sk: sk_raw || new Uint8Array(32),
-		x25519PK  : window.Curves.x25519.getPublicKey(window.Curves.x25519.utils.randomPrivateKey()),
-		x25519SK  : window.Curves.x25519.utils.randomPrivateKey(),
-		combinedSS: ss, // from test vector
-	  };
-
-	  return fallback;
+	// === Helper: ASCII-armored OpenPGP block ===
+	function armoredOpenPGP(blockType, bytes) {
+	  const b64 = uint8ToBase64(bytes).replace(/.{1,76}/g, ‘$&\n’);
+	  return `-----BEGIN PGP ${blockType} KEY BLOCK-----\n\n${b64}-----END PGP ${blockType} KEY BLOCK-----`;
 	}
 
 	function hexToBytes(hex) {
-	  const len = hex.length / 2;
-	  const bytes = new Uint8Array(len);
-	  for (let i = 0; i < len; ++i) {
-		bytes[i] = parseInt(hex.substr(2*i, 2), 16);
-	  }
+	  const bytes = new Uint8Array(hex.length / 2);
+	  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(2 * i, 2), 16);
 	  return bytes;
 	}
 
-	// === SLH-DSA Signing Keygen (mandatory SHA3-512) ===
-	async function generateSLHDSA() {
-	  // Per draft-ietf-openpgp-pqc, SLH-DSA-SHAKE-256s uses SHA3-512 internally
-	  const sk = slhdsa.utils.randomPrivateKey();
-	  const pk = slhdsa.getPublicKey(sk);
-	  return { sk, pk };
+	// === SLH-DSA-SHAKE-256s signing keygen (synchronous but CPU-intensive) ===
+	function generateSLHDSA() {
+	  const { publicKey: pk, secretKey: sk } = slh_dsa_shake_256s.keygen();
+	  return { pk, sk };
+	}
+
+	// === KitchenSink: ML-KEM-768 + X25519, HKDF-SHA-256 ===
+	function generateKitchenSink() {
+	  const { publicKey: mlkem768pk, secretKey: mlkem768sk } = ml_kem768.keygen();
+
+	  const x25519SK = x25519.utils.randomPrivateKey();
+	  const x25519PK = x25519.getPublicKey(x25519SK);
+
+	  // KEM encapsulation
+	  const { cipherText: ciphertext, sharedSecret: kemSS } = ml_kem768.encapsulate(mlkem768pk);
+
+	  // ECDH: use a fresh ephemeral key as the peer (demo — real use needs a recipient’s public key)
+	  const ephSK = x25519.utils.randomPrivateKey();
+	  const x25519SS = x25519.getSharedSecret(ephSK, x25519PK);
+
+	  // Combine KEM + ECDH shared secrets via HKDF-SHA-256
+	  const ikm = new Uint8Array([...kemSS, ...x25519SS]);
+	  const info = new TextEncoder().encode(‘PQC-Hybrid-OpenPGP’);
+	  const combinedSS = hkdf(sha256, ikm, new Uint8Array(0), info, 48);
+
+	  return { mlkem768pk, mlkem768sk, x25519PK, x25519SK, combinedSS, ciphertext };
+	}
+
+	// === XWing: ML-KEM-768 + X25519 (test-vector shared secret for demo) ===
+	function generateXWing() {
+	  const { publicKey: mlkem768pk, secretKey: mlkem768sk } = ml_kem768.keygen();
+	  const { cipherText: ciphertext, sharedSecret: combinedSS } = ml_kem768.encapsulate(mlkem768pk);
+	  return {
+		mlkem768pk, mlkem768sk,
+		x25519PK: x25519.getPublicKey(x25519.utils.randomPrivateKey()),
+		x25519SK: x25519.utils.randomPrivateKey(),
+		combinedSS, ciphertext,
+	  };
 	}
 
 	// === Generate Hybrid PQC Key (SLH-DSA + ML-KEM+X448 or KitchenSink/XWing) ===
-	async function generatePQCKey(mode = 'x448') {
-	  const userIdInput = document.getElementById('userId');
-	  const userId = userIdInput.value || "PQC User <user@example.org>";
+	async function generatePQCKey(mode = ‘x448’) {
+	  const out = document.getElementById(‘output’);
+	  out.textContent = ‘Generating… SLH-DSA key gen may take 10–30 s, please wait.’;
 
-	  // Step 1: SLH-DSA signing key
-	  const slhKP = await generateSLHDSA();
-	  const slhPK  = slhKP.pk;
-	  const slhSK  = slhKP.sk;
+	  // Yield to browser so the message renders before the blocking SLH-DSA call
+	  await new Promise(r => setTimeout(r, 50));
+
+	  // Step 1: SLH-DSA signing key (synchronous, CPU-intensive)
+	  const slhKP = generateSLHDSA();
 
 	  // Step 2: Hybrid KEM key
 	  let kemKP;
-	  if (mode === 'x448') {
+	  if (mode === ‘x448’) {
 		// RFC 9580 v6 + draft: ML-KEM-1024 + X448
-		const mlKP = await window.PQC.mlkem1024.generateKeyPair();
-		const xKP = window.Curves.x448.getPrivateKeyFromSeed(window.Curves.x448.utils.randomPrivateKey());
-		const xPK = window.Curves.x448.getPublicKey(xKP);
-		kemKP = {
-		  mlkemPK: mlKP.publicKey,
-		  mlkemSK: mlKP.secretKey,
-		  x448PK : xPK,
-		  x448SK : xKP
-		};
-	  } else if (mode === 'xwing') {
-		// Use XWing profile: MLKEM-768 + X25519
-		kemKP = await generateXWing();
+		const { publicKey: mlkemPK, secretKey: mlkemSK } = ml_kem1024.keygen();
+		const x448SK = x448.utils.randomPrivateKey();
+		const x448PK = x448.getPublicKey(x448SK);
+		kemKP = { mlkem768pk: mlkemPK, mlkemSK, x448PK, x448SK };
+	  } else if (mode === ‘xwing’) {
+		kemKP = generateXWing();
 	  } else {
-		// KitchenSink — MLKEM-768 + X25519
-		kemKP = await generateKitchenSink();
+		kemKP = generateKitchenSink();
 	  }
 
-	  // Serialize primary (SLH-DSA) + subkey (ML-KEM+X448/XWing/KitchenSink)
+	  // Serialize primary (SLH-DSA) + subkey (KEM)
 	  const primary = armoredOpenPGP("PUBLIC", slhKP.pk);
 	  const subkey  = armoredOpenPGP("SUBKEY", kemKP.mlkem768pk);
-
 	  const all = `${primary}\n\n${subkey}`;
 
-	  // Output to DOM
-	  document.getElementById('output').textContent = all;
+	  out.textContent = all;
 
-	  // Enable download buttons
-	  const blob = new Blob([all], { type: 'text/plain' });
+	  const blob = new Blob([all], { type: ‘text/plain’ });
 	  window.pqcBlob = blob;
+	  window.pqcKeys = { slhPK: slhKP.pk, slhSK: slhKP.sk, kemKP };
 
-	  // Also store keys (for signing later)
-	  window.pqcKeys = {
-		slhPK: slhKP.pk, slhSK: slhSK,
-		kemKP
-	  };
-
-	  alert(`✅ Generated PQC key pair (${mode})!\n\nDownload via "Save .asc"`);
-
-	  // Auto-download?
-	  const a = document.createElement('a');
+	  // Auto-download
+	  const a = document.createElement(‘a’);
 	  a.href = URL.createObjectURL(blob);
 	  a.download = `pqc-key-${mode}-${Date.now()}.asc`;
 	  document.body.appendChild(a);
@@ -227,7 +160,7 @@ ${b64padded.replace(/.{1,76}/g,'$&\n')}
 	  document.body.removeChild(a);
 	}
 
-	// Expose globally for buttons
+	// Expose for inline onclick handlers
 	window.generatePQCKey = generatePQCKey;
   </script>
 </head>
