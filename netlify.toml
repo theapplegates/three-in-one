@@ -1,0 +1,8 @@
+[build]
+  publish = "."
+  # No build command — this is a static HTML file, nothing to compile
+
+[[redirects]]
+  from = "/"
+  to   = "/pqc-key-lab.html"
+  status = 200
