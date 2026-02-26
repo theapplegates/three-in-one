@@ -65,12 +65,12 @@
 		import('https://esm.sh/@noble/post-quantum/ml-kem'),
 		import('https://esm.sh/@noble/post-quantum/slh-dsa'),
 		import('https://esm.sh/@noble/post-quantum/hybrid'),
-		import('https://esm.sh/@noble/curves/x448'),
+		import('https://esm.sh/@noble/curves/ed448'),
 	  ]);
 	  ({ ml_kem1024 }                       = results[0]);
 	  ({ slh_dsa_shake_256s }               = results[1]);
 	  ({ XWing, KitchenSink_ml_kem768_x25519 } = results[2]);
-	  ({ x448 }                             = results[3]);
+	  ({ x448 }                              = results[3]);
 	  genBtn.disabled = false;
 	  out.textContent = '✅ Libraries loaded. Click "Generate Key" to start.';
 	} catch (e) {
