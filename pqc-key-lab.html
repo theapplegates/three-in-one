@@ -50,7 +50,11 @@
   <!-- Load noble libraries via dynamic import so failures are visible in the UI -->
   <script>
   document.addEventListener(‘DOMContentLoaded’, async function () {
-	const out = document.getElementById(‘output’);
+	const out    = document.getElementById(‘output’);
+	const genBtn = document.getElementById(‘genBtn’);
+
+	// Disable button until libraries finish loading
+	genBtn.disabled = true;
 	out.textContent = ‘Loading cryptographic libraries…’;
 
 	// Fetch all modules in parallel; show a clear error if any import fails
@@ -70,6 +74,7 @@
 	  ({ x448 }                 = results[3]);
 	  ({ sha256 }               = results[4]);
 	  ({ hkdf }                 = results[5]);
+	  genBtn.disabled = false;
 	  out.textContent = ‘✅ Libraries loaded. Click "Generate Key" to start.’;
 	} catch (e) {
 	  out.textContent = ‘ERROR: Failed to load cryptographic libraries.\n\n’
@@ -199,7 +204,7 @@
 	  <input type="text" id="userId" value="PQC Test User <pqc@example.org>" />
 
 	  <div class="btn-row">
-		<button class="btn btn-primary" onclick="generatePQCKey(document.getElementById('profileMode').value)">
+		<button id="genBtn" class="btn btn-primary" onclick="generatePQCKey(document.getElementById('profileMode').value)">
 		  ⚡ Generate Key
 		</button>
 	  </div>
