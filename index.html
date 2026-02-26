@@ -57,23 +57,19 @@
 	genBtn.disabled = true;
 	out.textContent = ‘Loading cryptographic libraries…’;
 
-	// Fetch all modules in parallel; show a clear error if any import fails
-	let ml_kem768, ml_kem1024, slh_dsa_shake_256s, x25519, x448, sha256, hkdf;
+	// Fetch only the modules we need; show a clear error if any import fails
+	let ml_kem1024, slh_dsa_shake_256s, XWing, KitchenSink_ml_kem768_x25519, x448;
 	try {
 	  const results = await Promise.all([
 		import(‘https://esm.sh/@noble/post-quantum/ml-kem’),
 		import(‘https://esm.sh/@noble/post-quantum/slh-dsa’),
-		import(‘https://esm.sh/@noble/curves/x25519’),
+		import(‘https://esm.sh/@noble/post-quantum/hybrid’),
 		import(‘https://esm.sh/@noble/curves/x448’),
-		import(‘https://esm.sh/@noble/hashes/sha2’),
-		import(‘https://esm.sh/@noble/hashes/hkdf’),
 	  ]);
-	  ({ ml_kem768, ml_kem1024 } = results[0]);
-	  ({ slh_dsa_shake_256s }    = results[1]);
-	  ({ x25519 }               = results[2]);
-	  ({ x448 }                 = results[3]);
-	  ({ sha256 }               = results[4]);
-	  ({ hkdf }                 = results[5]);
+	  ({ ml_kem1024 }                       = results[0]);
+	  ({ slh_dsa_shake_256s }               = results[1]);
+	  ({ XWing, KitchenSink_ml_kem768_x25519 } = results[2]);
+	  ({ x448 }                             = results[3]);
 	  genBtn.disabled = false;
 	  out.textContent = ‘✅ Libraries loaded. Click "Generate Key" to start.’;
 	} catch (e) {
@@ -83,85 +79,56 @@
 	  return;
 	}
 
-	// === Helper: Uint8Array → correct Base64 ===
-	function uint8ToBase64(bytes) {
-	  let binary = ‘’;
-	  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-	  return btoa(binary);
+	// === Helper: Uint8Array → Base64 ===
+	function toBase64(bytes) {
+	  let s = ‘’;
+	  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+	  return btoa(s);
 	}
 
-	// === Helper: ASCII-armored OpenPGP block ===
-	function armoredOpenPGP(blockType, bytes) {
-	  const b64 = uint8ToBase64(bytes).replace(/.{1,76}/g, ‘$&\n’);
-	  return `-----BEGIN PGP ${blockType} KEY BLOCK-----\n\n${b64}-----END PGP ${blockType} KEY BLOCK-----`;
+	// === Helper: ASCII-armored OpenPGP-style block ===
+	function armored(label, bytes) {
+	  const b64 = toBase64(bytes).replace(/.{1,76}/g, ‘$&\n’);
+	  return `-----BEGIN PGP ${label} KEY BLOCK-----\n\n${b64}-----END PGP ${label} KEY BLOCK-----`;
 	}
 
-	// === SLH-DSA-SHAKE-256s signing keygen (synchronous but CPU-intensive) ===
-	function generateSLHDSA() {
-	  const { publicKey: pk, secretKey: sk } = slh_dsa_shake_256s.keygen();
-	  return { pk, sk };
-	}
-
-	// === KitchenSink: ML-KEM-768 + X25519, HKDF-SHA-256 ===
-	function generateKitchenSink() {
-	  const { publicKey: mlkem768pk, secretKey: mlkem768sk } = ml_kem768.keygen();
-	  const x25519SK = x25519.utils.randomPrivateKey();
-	  const x25519PK = x25519.getPublicKey(x25519SK);
-	  const { cipherText: ciphertext, sharedSecret: kemSS } = ml_kem768.encapsulate(mlkem768pk);
-	  const ephSK = x25519.utils.randomPrivateKey();
-	  const x25519SS = x25519.getSharedSecret(ephSK, x25519PK);
-	  const ikm = new Uint8Array([...kemSS, ...x25519SS]);
-	  const info = new TextEncoder().encode(‘PQC-Hybrid-OpenPGP’);
-	  const combinedSS = hkdf(sha256, ikm, new Uint8Array(0), info, 48);
-	  return { mlkem768pk, mlkem768sk, x25519PK, x25519SK, combinedSS, ciphertext };
-	}
-
-	// === XWing: ML-KEM-768 + X25519 (test-vector shared secret for demo) ===
-	function generateXWing() {
-	  const { publicKey: mlkem768pk, secretKey: mlkem768sk } = ml_kem768.keygen();
-	  const { cipherText: ciphertext, sharedSecret: combinedSS } = ml_kem768.encapsulate(mlkem768pk);
-	  return {
-		mlkem768pk, mlkem768sk,
-		x25519PK: x25519.getPublicKey(x25519.utils.randomPrivateKey()),
-		x25519SK: x25519.utils.randomPrivateKey(),
-		combinedSS, ciphertext,
-	  };
-	}
-
-	// === Generate Hybrid PQC Key (SLH-DSA + ML-KEM+X448 or KitchenSink/XWing) ===
+	// === Generate Hybrid PQC Key ===
 	async function generatePQCKey(mode = ‘x448’) {
 	  out.textContent = ‘Generating… SLH-DSA key gen may take 10–30 s, please wait.’;
-
-	  // Yield to browser so the message renders before the blocking SLH-DSA call
 	  await new Promise(r => setTimeout(r, 50));
 
 	  try {
-		// Step 1: SLH-DSA signing key (synchronous, CPU-intensive)
-		const slhKP = generateSLHDSA();
+		// Primary: SLH-DSA-SHAKE-256s signing key (CPU-intensive, synchronous)
+		const { publicKey: slhPK, secretKey: slhSK } = slh_dsa_shake_256s.keygen();
 
-		// Step 2: Hybrid KEM key
-		let kemKP;
-		if (mode === ‘x448’) {
-		  const { publicKey: mlkemPK, secretKey: mlkemSK } = ml_kem1024.keygen();
+		// Subkey: hybrid KEM — use the proper noble hybrid implementations
+		let kemPK, kemSK;
+		if (mode === ‘xwing’) {
+		  // XWing = ML-KEM-768 + X25519 (draft-connolly-cfrg-xwing-kem)
+		  ({ publicKey: kemPK, secretKey: kemSK } = XWing.keygen());
+		} else if (mode === ‘kitchensink’) {
+		  // KitchenSink = ML-KEM-768 + X25519 + SHAKE256/HKDF
+		  ({ publicKey: kemPK, secretKey: kemSK } = KitchenSink_ml_kem768_x25519.keygen());
+		} else {
+		  // RFC 9580 v6 default: ML-KEM-1024 + X448
+		  const { publicKey: mlPK, secretKey: mlSK } = ml_kem1024.keygen();
 		  const x448SK = x448.utils.randomPrivateKey();
 		  const x448PK = x448.getPublicKey(x448SK);
-		  kemKP = { mlkem768pk: mlkemPK, mlkemSK, x448PK, x448SK };
-		} else if (mode === ‘xwing’) {
-		  kemKP = generateXWing();
-		} else {
-		  kemKP = generateKitchenSink();
+		  // Concatenate ML-KEM-1024 pk + X448 pk as the combined subkey
+		  kemPK = new Uint8Array([...mlPK, ...x448PK]);
+		  kemSK = new Uint8Array([...mlSK, ...x448SK]);
 		}
 
-		// Serialize primary (SLH-DSA) + subkey (KEM)
-		const primary = armoredOpenPGP("PUBLIC", slhKP.pk);
-		const subkey  = armoredOpenPGP("PUBLIC", kemKP.mlkem768pk);
+		// Produce ASCII-armored output
+		const primary = armored("PUBLIC", slhPK);
+		const subkey  = armored("PUBLIC", kemPK);
 		const all = `${primary}\n\n${subkey}`;
 
 		out.textContent = all;
 
 		const blob = new Blob([all], { type: ‘text/plain’ });
 		window.pqcBlob = blob;
-		window.pqcKeys = { slhPK: slhKP.pk, slhSK: slhKP.sk, kemKP };
+		window.pqcKeys = { slhPK, slhSK, kemPK, kemSK };
 
 		// Auto-download
 		const a = document.createElement(‘a’);
