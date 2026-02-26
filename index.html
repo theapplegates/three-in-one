@@ -113,7 +113,7 @@
 		} else {
 		  // RFC 9580 v6 default: ML-KEM-1024 + X448
 		  const { publicKey: mlPK, secretKey: mlSK } = ml_kem1024.keygen();
-		  const x448SK = x448.utils.randomPrivateKey();
+		  const x448SK = crypto.getRandomValues(new Uint8Array(56));
 		  const x448PK = x448.getPublicKey(x448SK);
 		  // Concatenate ML-KEM-1024 pk + X448 pk as the combined subkey
 		  kemPK = new Uint8Array([...mlPK, ...x448PK]);
