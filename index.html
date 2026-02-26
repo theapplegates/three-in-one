@@ -48,7 +48,8 @@
   </style>
 
   <!-- Load noble libraries via dynamic import so failures are visible in the UI -->
-  <script>
+  <!-- type="module" is required so the browser treats import() as ES modules -->
+  <script type="module">
   document.addEventListener('DOMContentLoaded', async function () {
 	const out    = document.getElementById('output');
 	const genBtn = document.getElementById('genBtn');
