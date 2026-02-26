@@ -49,52 +49,52 @@
 
   <!-- Load noble libraries via dynamic import so failures are visible in the UI -->
   <script>
-  document.addEventListener(‘DOMContentLoaded’, async function () {
-	const out    = document.getElementById(‘output’);
-	const genBtn = document.getElementById(‘genBtn’);
+  document.addEventListener('DOMContentLoaded', async function () {
+	const out    = document.getElementById('output');
+	const genBtn = document.getElementById('genBtn');
 
 	// Disable button until libraries finish loading
 	genBtn.disabled = true;
-	out.textContent = ‘Loading cryptographic libraries…’;
+	out.textContent = 'Loading cryptographic libraries…';
 
 	// Fetch only the modules we need; show a clear error if any import fails
 	let ml_kem1024, slh_dsa_shake_256s, XWing, KitchenSink_ml_kem768_x25519, x448;
 	try {
 	  const results = await Promise.all([
-		import(‘https://esm.sh/@noble/post-quantum/ml-kem’),
-		import(‘https://esm.sh/@noble/post-quantum/slh-dsa’),
-		import(‘https://esm.sh/@noble/post-quantum/hybrid’),
-		import(‘https://esm.sh/@noble/curves/x448’),
+		import('https://esm.sh/@noble/post-quantum/ml-kem'),
+		import('https://esm.sh/@noble/post-quantum/slh-dsa'),
+		import('https://esm.sh/@noble/post-quantum/hybrid'),
+		import('https://esm.sh/@noble/curves/x448'),
 	  ]);
 	  ({ ml_kem1024 }                       = results[0]);
 	  ({ slh_dsa_shake_256s }               = results[1]);
 	  ({ XWing, KitchenSink_ml_kem768_x25519 } = results[2]);
 	  ({ x448 }                             = results[3]);
 	  genBtn.disabled = false;
-	  out.textContent = ‘✅ Libraries loaded. Click "Generate Key" to start.’;
+	  out.textContent = '✅ Libraries loaded. Click "Generate Key" to start.';
 	} catch (e) {
-	  out.textContent = ‘ERROR: Failed to load cryptographic libraries.\n\n’
+	  out.textContent = 'ERROR: Failed to load cryptographic libraries.\n\n'
 		+ e.message
-		+ ‘\n\nCheck your internet connection or try refreshing.’;
+		+ '\n\nCheck your internet connection or try refreshing.';
 	  return;
 	}
 
 	// === Helper: Uint8Array → Base64 ===
 	function toBase64(bytes) {
-	  let s = ‘’;
+	  let s = '';
 	  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
 	  return btoa(s);
 	}
 
 	// === Helper: ASCII-armored OpenPGP-style block ===
 	function armored(label, bytes) {
-	  const b64 = toBase64(bytes).replace(/.{1,76}/g, ‘$&\n’);
+	  const b64 = toBase64(bytes).replace(/.{1,76}/g, '$&\n');
 	  return `-----BEGIN PGP ${label} KEY BLOCK-----\n\n${b64}-----END PGP ${label} KEY BLOCK-----`;
 	}
 
 	// === Generate Hybrid PQC Key ===
-	async function generatePQCKey(mode = ‘x448’) {
-	  out.textContent = ‘Generating… SLH-DSA key gen may take 10–30 s, please wait.’;
+	async function generatePQCKey(mode = 'x448') {
+	  out.textContent = 'Generating… SLH-DSA key gen may take 10–30 s, please wait.';
 	  await new Promise(r => setTimeout(r, 50));
 
 	  try {
@@ -103,10 +103,10 @@
 
 		// Subkey: hybrid KEM — use the proper noble hybrid implementations
 		let kemPK, kemSK;
-		if (mode === ‘xwing’) {
+		if (mode === 'xwing') {
 		  // XWing = ML-KEM-768 + X25519 (draft-connolly-cfrg-xwing-kem)
 		  ({ publicKey: kemPK, secretKey: kemSK } = XWing.keygen());
-		} else if (mode === ‘kitchensink’) {
+		} else if (mode === 'kitchensink') {
 		  // KitchenSink = ML-KEM-768 + X25519 + SHAKE256/HKDF
 		  ({ publicKey: kemPK, secretKey: kemSK } = KitchenSink_ml_kem768_x25519.keygen());
 		} else {
@@ -126,19 +126,19 @@
 
 		out.textContent = all;
 
-		const blob = new Blob([all], { type: ‘text/plain’ });
+		const blob = new Blob([all], { type: 'text/plain' });
 		window.pqcBlob = blob;
 		window.pqcKeys = { slhPK, slhSK, kemPK, kemSK };
 
 		// Auto-download
-		const a = document.createElement(‘a’);
+		const a = document.createElement('a');
 		a.href = URL.createObjectURL(blob);
 		a.download = `pqc-key-${mode}-${Date.now()}.asc`;
 		document.body.appendChild(a);
 		a.click();
 		document.body.removeChild(a);
 	  } catch (e) {
-		out.textContent = ‘ERROR during key generation:\n\n’ + e.message;
+		out.textContent = 'ERROR during key generation:\n\n' + e.message;
 		console.error(e);
 	  }
 	}
